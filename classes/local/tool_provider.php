@@ -18,12 +18,15 @@ declare(strict_types=1);
 
 namespace webservice_mcp\local;
 
+use context;
 use core_external\external_api;
 use core_external\external_description;
 use core_external\external_multiple_structure;
 use core_external\external_single_structure;
 use core_external\external_value;
 use Throwable;
+use webservice;
+use webservice_access_exception;
 
 /**
  * Tool provider for MCP protocol.
@@ -41,27 +44,28 @@ use Throwable;
  */
 class tool_provider {
     /**
-     * Retrieve a list of available tools for a given token.
+     * Retrieve tool descriptions for the current user's authenticated token.
      *
-     * This method queries the database for external functions available
-     * to the service associated with the provided token, and converts
-     * each function's metadata into MCP tool format with JSON Schema
-     * descriptions.
+     * Converts the service's external functions into MCP tool descriptions.
      *
-     * @param string $token The external service token.
+     * @param string $token The authenticated Moodle external token.
      * @return array Array of tool definitions.
      */
     public static function get_tools(string $token): array {
-        global $DB;
+        global $DB, $USER;
 
-        $tokenrecord = $DB->get_record('external_tokens', ['token' => $token], '*', MUST_EXIST);
-
+        $record = $DB->get_record('external_tokens', ['token' => $token, 'userid' => $USER->id]);
+        if (!$record) {
+            throw new webservice_access_exception('The token service is unavailable to this user.');
+        }
+        $serviceid = self::require_service((int) $record->externalserviceid, (int) $record->userid,
+            context::instance_by_id((int) $record->contextid));
         $tools = [];
 
         // Query functions available for this service.
         $functions = $DB->get_records(
             'external_services_functions',
-            ['externalserviceid' => $tokenrecord->externalserviceid],
+            ['externalserviceid' => $serviceid],
             'functionname'
         );
 
@@ -90,11 +94,37 @@ class tool_provider {
                     'properties' => [
                         'result' => $outputschema,
                     ],
+                    'required' => ['result'],
                 ],
             ];
         }
 
         return $tools;
+    }
+
+    /**
+     * Enforce the same Moodle service restrictions for discovery and invocation.
+     *
+     * @param int $serviceid Service bound to the authenticated token
+     * @param int $userid Authenticated Moodle user
+     * @param context $context Token's context restriction
+     * @return int The authorised service ID
+     */
+    public static function require_service(int $serviceid, int $userid, context $context): int {
+        $manager = new webservice();
+        $service = $serviceid ? $manager->get_external_service_by_id($serviceid) : null;
+        if (!$service || !$service->enabled
+                || ($service->requiredcapability && !has_capability($service->requiredcapability, $context, $userid))) {
+            throw new webservice_access_exception('The token service is unavailable to this user.');
+        }
+        if ($service->restrictedusers) {
+            $member = $manager->get_ws_authorised_user($service->id, $userid);
+            if (!$member || ($member->validuntil && $member->validuntil <= time())
+                    || ($member->iprestriction && !address_in_subnet(getremoteaddr(), $member->iprestriction))) {
+                throw new webservice_access_exception('The token service is unavailable to this user.');
+            }
+        }
+        return $serviceid;
     }
 
     /**
@@ -105,7 +135,7 @@ class tool_provider {
      */
     protected static function build_schema(?external_description $desc): array {
         if ($desc === null) {
-            return ['type' => 'object', 'properties' => []];
+            return ['type' => 'null'];
         }
 
         $schema = self::generate_schema($desc);
@@ -126,6 +156,12 @@ class tool_provider {
     protected static function generate_schema(external_description $param): array {
         $type = self::get_schema_type($param);
         $schema = ['type' => $type];
+        if ($param->required === VALUE_REQUIRED) {
+            $schema['_required'] = true;
+        }
+        if ($param->allownull == NULL_ALLOWED) {
+            $schema['type'] = [$type, 'null'];
+        }
 
         // Handle external_value (simple types).
         if ($param instanceof external_value) {
@@ -135,16 +171,6 @@ class tool_provider {
 
             if ($param->required === VALUE_DEFAULT && $param->default !== null) {
                 $schema['default'] = $param->default;
-            }
-
-            // Mark as internally required for parent structure processing.
-            if ($param->required === VALUE_REQUIRED) {
-                $schema['_required'] = true;
-            }
-
-            // Handling for nullable values in JSON Schema.
-            if ($param->allownull == NULL_ALLOWED) {
-                $schema['type'] = [$type, 'null'];
             }
 
             return $schema;
@@ -160,13 +186,17 @@ class tool_provider {
 
                 // Collect required fields at this level.
                 if (!empty($subschema['_required'])) {
-                    $requiredfields[] = $key;
+                    $requiredfields[] = (string) $key;
                 }
 
                 // Remove internal marker before adding to schema.
                 unset($subschema['_required']);
 
                 $schema['properties'][$key] = $subschema;
+            }
+            // Even empty maps and maps with consecutive numeric keys must be JSON objects.
+            if (array_is_list($schema['properties'])) {
+                $schema['properties'] = (object) $schema['properties'];
             }
 
             if (!empty($requiredfields)) {

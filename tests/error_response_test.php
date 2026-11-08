@@ -43,8 +43,8 @@ final class error_response_test extends \PHPUnit\Framework\TestCase {
         $encode = $reflection->getMethod('safe_json_encode');
         $encode->setAccessible(true);
 
-        foreach ([2, 'conflict-92', '0', 0, null] as $id) {
-            foreach ([new \Exception('Draft conflict'), null] as $exception) {
+        foreach ([2, 'conflict-92', '0', 0] as $id) {
+            foreach ([new \moodle_exception('err_invalid_request', 'webservice_mcp'), new \TypeError('Private detail')] as $exception) {
                 $server = $reflection->newInstanceWithoutConstructor();
                 $property->setValue($server, new request(['jsonrpc' => '2.0', 'id' => $id, 'method' => 'tools/call']));
                 $result = json_decode($encode->invoke($server, $generate->invoke($server, $exception)), true, 512,
@@ -52,7 +52,8 @@ final class error_response_test extends \PHPUnit\Framework\TestCase {
                 $this->assertSame('2.0', $result['jsonrpc']);
                 $this->assertSame($id, $result['id']);
                 $this->assertSame(-32603, $result['error']['code']);
-                $this->assertSame($exception ? 'Draft conflict' : 'Internal error', $result['error']['message']);
+                $expected = $exception instanceof \moodle_exception ? $exception->getMessage() : 'Internal error';
+                $this->assertSame($expected, $result['error']['message']);
                 $this->assertArrayNotHasKey('result', $result);
             }
         }
@@ -67,6 +68,22 @@ final class error_response_test extends \PHPUnit\Framework\TestCase {
             $result = $generate->invoke($reflection->newInstanceWithoutConstructor(), $exception);
             $this->assertSame('2.0', $result['jsonrpc']);
             $this->assertNull($result['id']);
+        }
+    }
+
+    /**
+     * Invalid request parameters retain a valid ID before construction finishes.
+     */
+    public function test_invalid_params_keep_request_id(): void {
+        $reflection = new \ReflectionClass(server::class);
+        $generate = $reflection->getMethod('generate_error');
+        try {
+            new request(['jsonrpc' => '2.0', 'id' => '0', 'method' => 'ping', 'params' => 'invalid']);
+            $this->fail('Scalar params were accepted.');
+        } catch (\webservice_mcp\local\request_exception $exception) {
+            $result = $generate->invoke($reflection->newInstanceWithoutConstructor(), $exception);
+            $this->assertSame('0', $result['id']);
+            $this->assertSame(-32602, $result['error']['code']);
         }
     }
 }

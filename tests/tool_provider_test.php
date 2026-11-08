@@ -16,7 +16,6 @@
 
 namespace webservice_mcp;
 
-use context_system;
 use core_external\external_multiple_structure;
 use core_external\external_single_structure;
 use core_external\external_value;
@@ -236,6 +235,7 @@ final class tool_provider_test extends externallib_advanced_testcase {
         $this->assertEquals('object', $schema['type']);
         $this->assertArrayHasKey('user', $schema['properties']);
         $this->assertArrayHasKey('courses', $schema['properties']);
+        $this->assertSame(['user', 'courses'], $schema['required']);
 
         // Test nested user object.
         $userschema = $schema['properties']['user'];
@@ -284,8 +284,18 @@ final class tool_provider_test extends externallib_advanced_testcase {
 
         $schema = $method->invoke(null, null);
 
-        $this->assertEquals('object', $schema['type']);
-        $this->assertEquals([], $schema['properties']);
+        $this->assertSame(['type' => 'null'], $schema);
+    }
+
+    /**
+     * Empty property maps serialize as JSON objects at every depth.
+     */
+    public function test_empty_properties_are_json_objects(): void {
+        $method = new \ReflectionMethod(tool_provider::class, 'build_schema');
+        $empty = new external_single_structure([]);
+        $schema = $method->invoke(null, new external_single_structure(['nested' => $empty]));
+        $this->assertSame('{"type":"object","properties":{}}', json_encode($method->invoke(null, $empty)));
+        $this->assertSame('{"type":"object","properties":{}}', json_encode($schema['properties']['nested']));
     }
 
     /**
@@ -315,19 +325,13 @@ final class tool_provider_test extends externallib_advanced_testcase {
         $function->functionname = 'core_webservice_get_site_info';
         $DB->insert_record('external_services_functions', $function);
 
-        // Create a token for the service.
-        $token = new stdClass();
-        $token->token = bin2hex(random_bytes(32));
-        $token->userid = $USER->id;
-        $token->tokentype = EXTERNAL_TOKEN_PERMANENT;
-        $token->contextid = context_system::instance()->id;
-        $token->creatorid = $USER->id;
-        $token->timecreated = time();
-        $token->externalserviceid = $serviceid;
-        $DB->insert_record('external_tokens', $token);
-
-        // Test get_tools.
-        $tools = tool_provider::get_tools($token->token);
+        $token = \core_external\util::generate_token(
+            EXTERNAL_TOKEN_PERMANENT,
+            $DB->get_record('external_services', ['id' => $serviceid], '*', MUST_EXIST),
+            $USER->id,
+            \context_system::instance(),
+        );
+        $tools = tool_provider::get_tools($token);
 
         $this->assertIsArray($tools);
         $this->assertNotEmpty($tools);

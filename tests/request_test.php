@@ -121,7 +121,7 @@ final class request_test extends advanced_testcase {
         ];
 
         $this->expectException(moodle_exception::class);
-        $this->expectExceptionMessage('JSON-RPC version must be 2.0');
+        $this->expectExceptionMessage(get_string('err_invalid_jsonrpc', 'webservice_mcp'));
         new request($data);
     }
 
@@ -138,7 +138,7 @@ final class request_test extends advanced_testcase {
         ];
 
         $this->expectException(moodle_exception::class);
-        $this->expectExceptionMessage('JSON-RPC version must be 2.0');
+        $this->expectExceptionMessage(get_string('err_invalid_jsonrpc', 'webservice_mcp'));
         new request($data);
     }
 
@@ -154,7 +154,7 @@ final class request_test extends advanced_testcase {
         ];
 
         $this->expectException(moodle_exception::class);
-        $this->expectExceptionMessage('Method field is required and must be a string');
+        $this->expectExceptionMessage(get_string('err_missing_method', 'webservice_mcp'));
         new request($data);
     }
 
@@ -171,7 +171,7 @@ final class request_test extends advanced_testcase {
         ];
 
         $this->expectException(moodle_exception::class);
-        $this->expectExceptionMessage('Method field is required and must be a string');
+        $this->expectExceptionMessage(get_string('err_missing_method', 'webservice_mcp'));
         new request($data);
     }
 
@@ -188,7 +188,7 @@ final class request_test extends advanced_testcase {
         ];
 
         $this->expectException(moodle_exception::class);
-        $this->expectExceptionMessage('Method field is required and must be a string');
+        $this->expectExceptionMessage(get_string('err_missing_method', 'webservice_mcp'));
         new request($data);
     }
 

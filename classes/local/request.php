@@ -18,7 +18,7 @@ declare(strict_types=1);
 
 namespace webservice_mcp\local;
 
-use core\exception\moodle_exception;
+use JsonException;
 
 /**
  * Immutable and validated MCP JSON-RPC 2.0 request.
@@ -40,16 +40,16 @@ use core\exception\moodle_exception;
  */
 class request {
     /** @var string JSON-RPC protocol version. Always "2.0". */
-    public string $jsonrpc;
+    public readonly string $jsonrpc;
 
     /** @var string The requested MCP method name. */
-    public string $method;
+    public readonly string $method;
 
     /** @var int|string|null Optional request ID. Present for calls expecting a response, null for notifications. */
-    public mixed $id;
+    public readonly int|string|null $id;
 
     /** @var array|null Method parameters as an array, or null if not provided. */
-    public ?array $params;
+    public readonly ?array $params;
 
     /**
      * Constructor.
@@ -57,7 +57,7 @@ class request {
      * Builds a validated, immutable MCP request object from a decoded JSON array.
      *
      * @param array $data Decoded JSON representing the JSON-RPC request.
-     * @throws moodle_exception If validation fails or required fields are missing.
+     * @throws request_exception If validation fails or required fields are missing.
      */
     public function __construct(array $data) {
         $this->validate($data);
@@ -71,32 +71,21 @@ class request {
     /**
      * Validate JSON-RPC 2.0 request structure.
      *
-     * Ensures the data contains the required `jsonrpc` field set to "2.0"
-     * and a valid, non-empty method name.
-     *
      * @param array $data Decoded JSON input.
-     * @return void
-     * @throws moodle_exception If the JSON-RPC structure is invalid.
+     * @throws request_exception If the JSON-RPC structure is invalid.
      */
     protected function validate(array $data): void {
         if (($data['jsonrpc'] ?? null) !== '2.0') {
-            throw new moodle_exception(
-                'err_invalid_jsonrpc',
-                'webservice_mcp',
-                '',
-                null,
-                'JSON-RPC version must be 2.0'
-            );
+            throw new request_exception('err_invalid_jsonrpc', -32600);
         }
-
-        if (empty($data['method']) || !is_string($data['method'])) {
-            throw new moodle_exception(
-                'err_missing_method',
-                'webservice_mcp',
-                '',
-                null,
-                'Method field is required and must be a string'
-            );
+        if (!is_string($data['method'] ?? null) || $data['method'] === '') {
+            throw new request_exception('err_missing_method', -32600);
+        }
+        if (array_key_exists('id', $data) && !is_int($data['id']) && !is_string($data['id'])) {
+            throw new request_exception('err_invalid_id', -32600);
+        }
+        if (array_key_exists('params', $data) && !is_array($data['params'])) {
+            throw new request_exception('err_invalid_params', -32602, $data['id'] ?? null);
         }
     }
 
@@ -107,53 +96,24 @@ class request {
      * validates the structure, and returns a fully constructed request object.
      *
      * @return self A validated request instance.
-     * @throws moodle_exception If the body is empty, JSON decoding fails, or the request format is invalid.
+     * @throws request_exception If the body is empty, JSON decoding fails, or the request format is invalid.
      */
     public static function from_raw_input(): self {
         $raw = file_get_contents('php://input');
 
         if ($raw === false || $raw === '') {
-            throw new moodle_exception(
-                'err_empty_request',
-                'webservice_mcp',
-                '',
-                null,
-                'Request body is empty'
-            );
+            throw new request_exception('err_empty_request', -32700);
         }
 
-        $data = json_decode($raw, true);
-
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            throw new moodle_exception(
-                'err_invalid_json',
-                'webservice_mcp',
-                '',
-                null,
-                'JSON parsing error: ' . json_last_error_msg()
-            );
+        try {
+            $data = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+        } catch (JsonException) {
+            throw new request_exception('err_invalid_json', -32700);
         }
-
-        if (!is_array($data)) {
-            throw new moodle_exception(
-                'err_invalid_json',
-                'webservice_mcp',
-                '',
-                null,
-                'JSON must be an object'
-            );
+        if (!is_array($data) || array_is_list($data)) {
+            throw new request_exception('err_invalid_request', -32600);
         }
 
         return new self($data);
-    }
-
-    /**
-     * Check if raw input body is empty.
-     *
-     * @return bool True if the request body is empty or unreadable.
-     */
-    public static function is_raw_input_empty(): bool {
-        $raw = file_get_contents('php://input');
-        return $raw === '' || $raw === false;
     }
 }

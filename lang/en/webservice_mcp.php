@@ -25,8 +25,12 @@
  */
 
 $string['err_empty_request'] = 'Request body is empty';
+$string['err_invalid_arguments'] = 'Tool arguments must be an object';
+$string['err_invalid_id'] = 'Request ID must be an integer or a string';
 $string['err_invalid_json'] = 'Invalid JSON';
 $string['err_invalid_jsonrpc'] = 'Invalid JSON-RPC version';
+$string['err_invalid_params'] = 'Invalid request parameters';
+$string['err_invalid_request'] = 'Invalid request';
 $string['err_missing_method'] = 'Missing method';
 $string['err_missing_tool_name'] = 'Missing tool name';
 $string['mcp:use'] = 'Use MCP web service';

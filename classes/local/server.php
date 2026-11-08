@@ -26,8 +26,10 @@ use core_external\external_description;
 use core_external\external_multiple_structure;
 use core_external\external_single_structure;
 use core_external\external_value;
-use Exception;
 use stdClass;
+use Throwable;
+use webservice;
+use webservice_access_exception;
 use webservice_base_server;
 
 /**
@@ -114,16 +116,19 @@ class server extends webservice_base_server {
      * @return void
      */
     protected function parse_request(): void {
+        if ($this->mcprequest !== null) {
+            return;
+        }
         parent::set_web_service_call_settings();
 
         $this->token = $this->extract_token();
         $this->httpmethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
-        if ($this->httpmethod === 'POST' && !request::is_raw_input_empty()) {
+        if ($this->httpmethod === 'POST') {
             $this->mcprequest = request::from_raw_input();
 
             // Handle MCP tool invocation.
-            if ($this->is_tool_call()) {
+            if ($this->mcprequest->id !== null && $this->is_tool_call()) {
                 $this->extract_tool_call();
             }
         }
@@ -146,16 +151,42 @@ class server extends webservice_base_server {
      *   - $this->parameters
      *
      * @return void
-     * @throws moodle_exception If the tool name is missing.
+     * @throws request_exception If the tool name or arguments are invalid.
      */
     public function extract_tool_call(): void {
-        if (empty($this->mcprequest->params) || empty($this->mcprequest->params['name'])) {
-            throw new moodle_exception('err_missing_tool_name', 'webservice_mcp');
+        $params = $this->mcprequest->params ?? [];
+        $name = $params['name'] ?? null;
+        if (!is_string($name) || trim($name) === '') {
+            throw new request_exception('err_missing_tool_name', -32602, $this->mcprequest->id);
+        }
+        $arguments = array_key_exists('arguments', $params) ? $params['arguments'] : [];
+        if (!is_array($arguments) || ($arguments !== [] && array_is_list($arguments))) {
+            throw new request_exception('err_invalid_arguments', -32602, $this->mcprequest->id);
         }
 
-        // Extract function and arguments.
-        $this->functionname = $this->mcprequest->params['name'];
-        $this->parameters = $this->mcprequest->params['arguments'] ?? [];
+        $this->functionname = $name;
+        $this->parameters = $arguments;
+    }
+
+    /**
+     * Load the function after checking the same service used for discovery.
+     */
+    protected function load_function_info(): void {
+        if ($this->authmethod !== WEBSERVICE_AUTHMETHOD_PERMANENT_TOKEN) {
+            parent::load_function_info();
+            return;
+        }
+
+        $serviceid = tool_provider::require_service(
+            (int) $this->restricted_serviceid,
+            (int) $this->userid,
+            $this->restricted_context,
+        );
+        $manager = new webservice();
+        if (!$manager->service_function_exists($this->functionname, $serviceid)) {
+            throw new webservice_access_exception('The function is unavailable in the token service.');
+        }
+        $this->function = external_api::external_function_info($this->functionname);
     }
 
     /**
@@ -225,13 +256,14 @@ class server extends webservice_base_server {
             exit;
         }
 
+        if ($this->mcprequest->id === null) {
+            http_response_code(202);
+            return;
+        }
+
         switch ($this->mcprequest->method) {
             case 'initialize':
                 $this->send_initialize_response();
-                break;
-
-            case 'notifications/initialized':
-                $this->handle_initialized_notification();
                 break;
 
             case 'ping':
@@ -299,17 +331,6 @@ class server extends webservice_base_server {
     }
 
     /**
-     * Handle MCP notifications/initialized client notification.
-     *
-     * According to MCP specification, notifications do not expect a JSON-RPC response body.
-     *
-     * @return void
-     */
-    protected function handle_initialized_notification(): void {
-        http_response_code(204);
-    }
-
-    /**
      * Sends a JSON-RPC ping response.
      *
      * @return void
@@ -360,15 +381,14 @@ class server extends webservice_base_server {
                     $this->returns
                 );
             } else {
-                $validatedvalues = $this->returns;
+                $validatedvalues = null;
             }
-        } catch (Exception $ex) {
+        } catch (Throwable $ex) {
             $exception = $ex;
         }
 
         if ($exception !== null) {
-            $response = $this->generate_error($exception);
-            echo $this->safe_json_encode($response);
+            $this->send_error($exception);
             return;
         }
 
@@ -379,7 +399,7 @@ class server extends webservice_base_server {
 
         $content = [
             'type' => 'text',
-            'text' => json_encode($validatedvalues, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'text' => $this->safe_json_encode($validatedvalues),
         ];
 
         $result = [
@@ -399,11 +419,11 @@ class server extends webservice_base_server {
     /**
      * Sends an error response, optionally logging exception details for debugging.
      *
-     * @param Exception|null $ex The exception to log and include in the error response, or null if no exception is provided.
+     * @param Throwable|null $ex The error to report
      * @return void
      */
     protected function send_error($ex = null): void {
-        if ($ex !== null && debugging('', DEBUG_MINIMAL)) {
+        if ($ex !== null && !($ex instanceof request_exception) && debugging('', DEBUG_MINIMAL)) {
             $this->log_exception_for_debug($ex);
         }
 
@@ -413,41 +433,24 @@ class server extends webservice_base_server {
     /**
      * Generates a standardized error response for handling exceptions in the JSON-RPC protocol.
      *
-     * @param Exception|moodle_exception|null $ex The exception to process. If null, a default internal error is returned.
-     * @return array The formatted error response containing error code, message, and additional data.
+     * @param Throwable|null $ex The error to report
+     * @return array The JSON-RPC error envelope
      */
-    protected function generate_error($ex): array {
-        if ($ex === null) {
-            return [
-                'jsonrpc' => '2.0',
-                'error' => ['code' => -32603, 'message' => 'Internal error'],
-                'id' => $this->mcprequest->id ?? null,
+    protected function generate_error(?Throwable $ex): array {
+        $id = $this->mcprequest->id ?? null;
+        $error = ['code' => -32603, 'message' => 'Internal error'];
+        if ($ex instanceof request_exception) {
+            $id = $ex->requestid;
+            $error = ['code' => $ex->rpccode, 'message' => $ex->getMessage()];
+        } else if ($ex instanceof moodle_exception) {
+            $error = [
+                'code' => $ex instanceof invalid_parameter_exception ? -32602 : -32603,
+                'message' => $ex->getMessage(),
+                'data' => ['errorcode' => $ex->errorcode],
             ];
         }
 
-        $errordata = [
-            'exception' => get_class($ex),
-            'message' => $ex->getMessage(),
-            'code' => $ex->getCode(),
-        ];
-
-        if (isset($ex->errorcode)) {
-            $errordata['errorcode'] = $ex->errorcode;
-        }
-
-        if (debugging() && isset($ex->debuginfo)) {
-            $errordata['debuginfo'] = $ex->debuginfo;
-        }
-
-        return [
-            'jsonrpc' => '2.0',
-            'error' => [
-                'code' => -32603,
-                'message' => $ex->getMessage(),
-                'data' => $errordata,
-            ],
-            'id' => $this->mcprequest->id ?? null,
-        ];
+        return ['jsonrpc' => '2.0', 'error' => $error, 'id' => $id];
     }
 
     /**
@@ -496,10 +499,10 @@ class server extends webservice_base_server {
     /**
      * Log rich exception information when debugging is enabled.
      *
-     * @param Exception $ex
+     * @param Throwable $ex
      * @return void
      */
-    protected function log_exception_for_debug(Exception $ex): void {
+    protected function log_exception_for_debug(Throwable $ex): void {
         $info = get_exception_info($ex);
         $message = 'MCP exception handler: ' . $info->message .
             ' Debug: ' . ($info->debuginfo ?? '') . "\n" .
@@ -583,7 +586,7 @@ class server extends webservice_base_server {
                 unset($response[$key]);
             }
 
-            return $result;
+            return (object) $result;
         } else if ($description instanceof external_multiple_structure) {
             if (!is_array($response)) {
                 throw new invalid_response_exception(
