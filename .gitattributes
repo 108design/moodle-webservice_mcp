@@ -12,6 +12,7 @@
 "/classes" -export-ignore -export-subst
 "/classes/local" -export-ignore -export-subst
 "/classes/local/request.php" -export-ignore -export-subst
+"/classes/local/request_exception.php" -export-ignore -export-subst
 "/classes/local/server.php" -export-ignore -export-subst
 "/classes/local/tool_provider.php" -export-ignore -export-subst
 "/classes/privacy" -export-ignore -export-subst
