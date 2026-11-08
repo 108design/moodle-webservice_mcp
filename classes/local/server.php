@@ -419,9 +419,9 @@ class server extends webservice_base_server {
     protected function generate_error($ex): array {
         if ($ex === null) {
             return [
-                'jsonrpc' => $this->mcprequest->jsonrpc,
+                'jsonrpc' => '2.0',
                 'error' => ['code' => -32603, 'message' => 'Internal error'],
-                'id' => $this->mcprequest->id,
+                'id' => $this->mcprequest->id ?? null,
             ];
         }
 
@@ -440,7 +440,7 @@ class server extends webservice_base_server {
         }
 
         return [
-            'jsonrpc' => $this->mcprequest->id ?? '2.0',
+            'jsonrpc' => '2.0',
             'error' => [
                 'code' => -32603,
                 'message' => $ex->getMessage(),

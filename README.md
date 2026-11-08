@@ -1,3 +1,5 @@
+> This GPL fork of the [Moodle MCP Web Service](https://github.com/onbirdev/moodle-webservice_mcp) preserves MohammadReza PourMohammad's original plugin and Moodle component name. Use the [GitHub release ZIP](https://github.com/108design/moodle-webservice_mcp/releases) for the 108design-tested build. See [the fork changelog](CHANGES-108DESIGN.md) and [the GPL](COPYING.txt).
+
 # Moodle MCP Web Service Plugin
 
 A Moodle web service plugin that implements the **Model Context Protocol (MCP)** for seamless integration with AI assistants and external systems. This plugin exposes Moodle's external functions as MCP tools using JSON-RPC 2.0, making them discoverable and callable by MCP-compatible clients.
